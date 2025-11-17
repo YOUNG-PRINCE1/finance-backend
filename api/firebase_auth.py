@@ -9,20 +9,21 @@ from rest_framework import status
 import json
 import os
 
+# 🔐 Lazy Firebase initialization
+firebase_app = None
 
-# 🔐 Initialize Firebase only once (Render-safe)
-if not firebase_admin._apps:
-    firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
-
-    if not firebase_json:
-        raise ValueError(
-            "🔥 FIREBASE_SERVICE_ACCOUNT_KEY environment variable is missing! "
-            "Add it inside Render → Environment Variables."
-        )
-
-    # Load service account JSON from environment variable
-    cred = credentials.Certificate(json.loads(firebase_json))
-    firebase_admin.initialize_app(cred)
+def get_firebase_app():
+    global firebase_app
+    if not firebase_app:
+        firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+        if not firebase_json:
+            raise ValueError(
+                "🔥 FIREBASE_SERVICE_ACCOUNT_KEY environment variable is missing! "
+                "Add it inside Render → Environment Variables."
+            )
+        cred = credentials.Certificate(json.loads(firebase_json))
+        firebase_app = firebase_admin.initialize_app(cred)
+    return firebase_app
 
 
 # 🌐 Firebase Authentication class for DRF
@@ -34,7 +35,8 @@ class FirebaseAuthentication(BaseAuthentication):
 
         token = auth_header.split("Bearer ")[-1]
         try:
-            decoded_token = auth.verify_id_token(token)
+            app = get_firebase_app()  # Lazy init
+            decoded_token = auth.verify_id_token(token, app)
         except Exception:
             raise AuthenticationFailed("Invalid Firebase token")
 
@@ -42,7 +44,9 @@ class FirebaseAuthentication(BaseAuthentication):
         email = decoded_token.get("email", "")
 
         # Get or create Django user
-        user, created = User.objects.get_or_create(username=uid, defaults={"email": email})
+        user, created = User.objects.get_or_create(
+            username=uid, defaults={"email": email}
+        )
         return (user, None)
 
 
@@ -60,7 +64,8 @@ def firebase_login_required(view_func):
         token = auth_header.split("Bearer ")[-1]
 
         try:
-            decoded_token = auth.verify_id_token(token)
+            app = get_firebase_app()  # Lazy init
+            decoded_token = auth.verify_id_token(token, app)
             request.firebase_uid = decoded_token["uid"]
         except Exception:
             return Response(
